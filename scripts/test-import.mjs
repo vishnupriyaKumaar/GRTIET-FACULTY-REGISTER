@@ -1,0 +1,11 @@
+import { DOMParser } from '@xmldom/xmldom';
+import fs from 'fs';
+globalThis.DOMParser = DOMParser;
+const { extractBlocks } = await import('../src/importer/extract.js');
+const { parseBlocks } = await import('../src/importer/parse.js');
+const f = process.argv[2];
+const buf = fs.readFileSync(f);
+const file = { name: f.split('/').pop(), type: '', arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) };
+const r = await extractBlocks(file);
+const res = parseBlocks(r.blocks);
+console.log(JSON.stringify(res, null, 1));

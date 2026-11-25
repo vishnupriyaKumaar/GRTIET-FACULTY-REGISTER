@@ -1,0 +1,40 @@
+{
+  "name": "grt-faculty-data-sheet",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "description": "GRT Institute of Engineering and Technology - Individual Faculty Data Sheet (Annexure II). Fill the form, download PDF / Word / Excel in the same format. Made by Team OTC.",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:web": "vite",
+    "dev:api": "node scripts/dev-api.mjs",
+    "test:api": "node scripts/test-api.mjs",
+    "test:import": "node scripts/test-import.mjs",
+    "build": "vite build",
+    "preview": "vite preview --host",
+    "test:export": "node scripts/test-export.mjs",
+    "setup": "npm install && npm run build",
+    "deploy": "npx --yes vercel@latest deploy --prod --yes",
+    "test:register": "node scripts/test-register.mjs"
+  },
+  "dependencies": {
+    "docx": "^9.5.0",
+    "exceljs": "^4.4.0",
+    "jspdf": "^3.0.1",
+    "jspdf-autotable": "^5.0.2",
+    "jszip": "^3.10.1",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^4.10.38",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tesseract.js": "^5.1.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "@xmldom/xmldom": "^0.9.12",
+    "vite": "^5.4.6"
+  }
+}
