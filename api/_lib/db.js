@@ -1,11 +1,12 @@
-// Database adapters.  Production = Firebase Firestore (key kept only in Vercel environment variables).
+// Database adapters.  Production = Supabase OR Firebase Firestore (keys kept only in Vercel environment variables;
+// Supabase is used when SUPABASE_URL is set, otherwise Firebase when FIREBASE_SERVICE_ACCOUNT is set).
 // Local test (npm run dev) = a JSON file.
 //   staff(id, data, updated)                       one document per teacher
 //   records(key, term, staffId, enc, z, updated)   one per teacher per semester (z = gzip, base64, <= 50 KB)
 //   files(id_idx: id, idx, total, chunk)           NPTEL certificates, cut into pieces
 //   settings(k, v)                                 password hash, token secret, change counter
 // "version" is a counter that every write changes.  Other devices ask for it first (1 read), and only
-// download data when it changed - this keeps the free Firebase read quota safe.
+// download data when it changed - this keeps the free database quota safe.
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -31,6 +32,49 @@ export function makeFileDb(file) {
     async deleteRecord(key) { tx((d) => { delete d.records[key]; }); },
     async deleteStaff(id) { tx((d) => { delete d.staff[id]; Object.keys(d.records).forEach((k) => { if (d.records[k].staffId === id) delete d.records[k]; }); }); },
     async clearAll() { tx((d) => { d.staff = {}; d.records = {}; d.files = {}; }); },
+  };
+}
+
+// ---- Supabase (Postgres, through its REST API) ---------------------------------------------------------------------------
+//   tables: staff(id, data, updated)  records(key, term, staff_id, enc, z, updated)  files(id, idx, total, chunk)  settings(k, v)
+export function makeSupabase(url, key, fetchImpl = fetch) {
+  const base = url.replace(/\/+$/, '') + '/rest/v1';
+  const H = { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' };
+  const call = async (method, p, body, extra = {}) => {
+    const r = await fetchImpl(base + p, { method, headers: { ...H, ...extra }, body: body === undefined ? undefined : JSON.stringify(body) });
+    const t = await r.text();
+    if (!r.ok) { const e = new Error(`Database error ${r.status}: ${t.slice(0, 200)}`); e.status = r.status; throw e; }
+    return t ? JSON.parse(t) : null;
+  };
+  const q = (s) => encodeURIComponent(s);
+  const upsert = (table, rows, conflict) => call('POST', `/${table}?on_conflict=${conflict}`, rows, { Prefer: 'resolution=merge-duplicates,return=minimal' });
+  const bump = () => upsert('settings', [{ k: 'version', v: Date.now() + Math.random() }], 'k');
+  const recOf = (r) => ({ key: r.key, term: r.term, staffId: r.staff_id, enc: r.enc, z: r.z, updated: Number(r.updated) });
+  return {
+    kind: 'supabase',
+    async getVersion() { const r = await call('GET', '/settings?k=eq.version&select=v'); return r[0]?.v ?? 0; },
+    async getSetting(k) { const r = await call('GET', `/settings?k=eq.${q(k)}&select=v`); return r[0]?.v ?? null; },
+    async setSetting(k, v) { await upsert('settings', [{ k, v }], 'k'); },
+    async listStaff() { return (await call('GET', '/staff?select=id,data,updated')).map((r) => ({ ...r.data, id: r.id })); },
+    async putStaff(row) { await upsert('staff', [{ id: row.id, data: row, updated: row.updated || Date.now() }], 'id'); await bump(); },
+    async listRecordMeta() { return (await call('GET', '/records?select=key,term,staff_id,updated')).map((r) => ({ key: r.key, term: r.term, staffId: r.staff_id, updated: Number(r.updated) })); },
+    async getRecords(keys) {
+      const out = [];
+      for (let i = 0; i < keys.length; i += 40) {
+        const part = keys.slice(i, i + 40).map((k) => `"${k.replace(/"/g, '')}"`).join(',');
+        (await call('GET', `/records?key=in.(${q(part)})&select=key,term,staff_id,enc,z,updated`)).forEach((r) => out.push(recOf(r)));
+      }
+      return out;
+    },
+    async getRecordsOfStaff(id) { return (await call('GET', `/records?staff_id=eq.${q(id)}&select=key,term,staff_id,enc,z,updated`)).map(recOf); },
+    async putRecord(r) { await upsert('records', [{ key: r.key, term: r.term, staff_id: r.staffId, enc: r.enc, z: r.z, updated: r.updated }], 'key'); await bump(); },
+    async putFileChunk(c) { await upsert('files', [{ id: c.id, idx: c.idx, total: c.total, chunk: c.chunk }], 'id,idx'); },
+    async getFileChunk(id, idx) { const r = await call('GET', `/files?id=eq.${q(id)}&idx=eq.${idx}&select=idx,total,chunk`); return r[0] || null; },
+    async fileIds() { return [...new Set((await call('GET', '/files?select=id&idx=eq.0')).map((r) => r.id))]; },
+    async deleteFiles(ids) { for (const id of ids) await call('DELETE', `/files?id=eq.${q(id)}`); },
+    async deleteRecord(key) { await call('DELETE', `/records?key=eq.${q(key)}`); await bump(); },
+    async deleteStaff(id) { await call('DELETE', `/records?staff_id=eq.${q(id)}`); await call('DELETE', `/staff?id=eq.${q(id)}`); await bump(); },
+    async clearAll() { await call('DELETE', '/records?key=neq.'); await call('DELETE', '/staff?id=neq.'); await call('DELETE', '/files?id=neq.'); await bump(); },
   };
 }
 
@@ -81,7 +125,9 @@ async function realFirestore(env) {
 let cached;
 export function getDb(env = process.env) {
   if (cached) return cached;
-  if (env.FIREBASE_SERVICE_ACCOUNT) { let p; cached = makeFirestore(() => (p ||= realFirestore(env))); }
+  const sk = env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_KEY;
+  if (env.SUPABASE_URL && sk) cached = makeSupabase(env.SUPABASE_URL, sk);                       // Supabase (if its keys are set in Vercel)
+  else if (env.FIREBASE_SERVICE_ACCOUNT) { let p; cached = makeFirestore(() => (p ||= realFirestore(env))); }
   else if (env.LOCAL_DB_FILE) cached = makeFileDb(env.LOCAL_DB_FILE);
   return cached || null;
 }
