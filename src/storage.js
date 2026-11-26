@@ -10,12 +10,13 @@ import { api } from './api.js';
 
 const cache = { staff: [], records: new Map() };     // records: key -> { key, term, staffId, updated, form }
 const fileCache = new Map();                          // fid -> data URL
+let seenVersion = 0;                                  // server change counter at the last full pull
 
 // small per-device settings (the selected academic year)
 export const getSetting = async (k) => { try { return JSON.parse(localStorage.getItem('grt_' + k)); } catch { return undefined; } };
 export const setSetting = async (k, v) => { try { localStorage.setItem('grt_' + k, JSON.stringify(v)); } catch { /* ignore */ } };
 
-export const resetCache = () => { cache.staff = []; cache.records = new Map(); fileCache.clear(); };
+export const resetCache = () => { cache.staff = []; cache.records = new Map(); fileCache.clear(); seenVersion = 0; };
 
 const fromServer = async (r) => ({ key: r.key, term: r.term, staffId: r.staffId, updated: r.updated, form: await unpack({ enc: r.enc, z: fromB64(r.z) }) });
 
@@ -24,7 +25,8 @@ export async function pull() {
   let changed = false, first = true;
   for (let guard = 0; guard < 400; guard++) {
     const have = {}; cache.records.forEach((v, k) => { have[k] = v.updated; });
-    const r = await api('pull', { have });
+    const r = await api('pull', { have, version: first ? seenVersion : 0 });
+    if (r.same) break;
     if (first) {
       first = false;
       const sig = (a) => JSON.stringify(a.map((s) => [s.id, s.updated, s.status]).sort());
@@ -34,7 +36,7 @@ export async function pull() {
       for (const k of [...cache.records.keys()]) if (!alive.has(k)) { cache.records.delete(k); changed = true; }
     }
     for (const rec of r.records) { cache.records.set(rec.key, await fromServer(rec)); changed = true; }
-    if (!r.more) break;
+    if (!r.more) { seenVersion = r.version; break; }
   }
   return changed;
 }
@@ -63,7 +65,7 @@ export async function putRecord(row) {
   return p.z.length;
 }
 
-const CHUNK = 1_000_000;
+const CHUNK = 700_000;
 async function uploadFile(id, data) {
   const total = Math.max(1, Math.ceil(data.length / CHUNK));
   for (let i = 0; i < total; i++) await api('putFile', { chunk: { id, idx: i, total, chunk: data.slice(i * CHUNK, (i + 1) * CHUNK) } });
@@ -102,6 +104,9 @@ export async function hydrate(form) {
   }));
   return { ...form, nptel };
 }
+
+// NEW: removes one semester record (used when a record is moved to another academic year / semester)
+export const removeRecord = async (key) => { await api('deleteRecord', { key }); cache.records.delete(key); };
 
 export const removeStaff = async (id) => {
   await api('deleteStaff', { id });

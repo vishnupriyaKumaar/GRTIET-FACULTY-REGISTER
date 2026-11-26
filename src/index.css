@@ -430,3 +430,6 @@ input:focus, select:focus, textarea:focus { border-color: var(--gold-dark); box-
 .live { display: inline-flex; align-items: center; padding: 6px 12px; border-radius: 999px; font-size: .85rem; font-weight: 700; background: #e6f6ea; color: #14702e; border: 1px solid #b8e2c3; }
 .live.offline { background: #fde8e8; color: #a11a1a; border-color: #f2b8b8; }
 .live.idle { background: #eee; color: #555; border-color: #ddd; }
+/* Update tab: edit the academic year / semester of a record */
+.term-edit { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 4px 0 14px; padding: 12px 14px; border: 1px solid var(--gold, #c9a227); border-radius: 12px; background: #fff8e1; }
+.term-edit select { min-height: 42px; padding: 0 10px; border-radius: 10px; border: 1px solid #cdb86a; background: #fff; font: inherit; }

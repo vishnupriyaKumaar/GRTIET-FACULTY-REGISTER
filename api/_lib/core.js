@@ -4,7 +4,7 @@ import { getDb } from './db.js';
 import { hashPassword, verifyPassword, signToken, readToken } from './auth.js';
 
 const MAX_Z = 90000;            // base64 chars of one compressed record (50 KB of bytes = ~68,300 chars)
-const MAX_CHUNK = 1_400_000;
+const MAX_CHUNK = 800_000;
 const PAGE = 30;                // records sent per pull
 const nameKey = (s) => String(s || '').trim().replace(/\s+/g, ' ').toLowerCase();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -53,11 +53,17 @@ export async function handle(body, authHeader, env = process.env) {
       }
       case 'pull': {
         const d = needAdmin(); if (d) return d;
+        const version = await db.getVersion();
+        if (body.version && body.version === version) return ok({ same: true, version });   // nothing changed: 1 cheap read
         const have = body.have || {};
         const [staff, meta] = await Promise.all([db.listStaff(), db.listRecordMeta()]);
         const need = meta.filter((m) => !have[m.key] || have[m.key] !== m.updated).map((m) => m.key);
         const send = await db.getRecords(need.slice(0, PAGE));
-        return ok({ staff, manifest: meta.map((m) => [m.key, m.updated]), records: send, more: need.length > PAGE });
+        return ok({ version, staff, manifest: meta.map((m) => [m.key, m.updated]), records: send, more: need.length > PAGE });
+      }
+      case 'deleteRecord': {                       // NEW: used when a record is moved to another academic year / semester
+        const d = needAdmin(); if (d) return d;
+        await db.deleteRecord(String(body.key)); return ok();
       }
       case 'lookup': {
         const q = nameKey(body.name); if (!q) return ok({ staff: null, records: [] });

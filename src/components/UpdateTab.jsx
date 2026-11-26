@@ -6,13 +6,24 @@ import { fmtDate } from '../utils.js';
 import { nameKey } from '../roster.js';
 import { hydrate } from '../storage.js';
 import { kb } from '../pack.js';
+import { SEMESTERS, makeTerm, parseTerm, yearOptions, validStartYear } from '../terms.js';
 
 // Update: pick a teacher of the selected semester, edit every detail, save, relieve or download.
-export default function UpdateTab({ term, items, selectedId, onSelect, onSave, onRelieve, onReinstate, onDelete, setMsg }) {
+export default function UpdateTab({ term, items, selectedId, onSelect, onSave, onTerm, records, onRelieve, onReinstate, onDelete, setMsg }) {
   const [q, setQ] = useState('');
   const cur = items.find((i) => i.staff.id === selectedId) || null;
   const [form, setForm] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [target, setTarget] = useState(term);                       // academic year + semester this record is kept under
+  const [yr, sem] = (() => { const p = parseTerm(target) || parseTerm(term); return [p.year, p.sem]; })();
+  useEffect(() => { setTarget(term); }, [term, selectedId]);
+  const setYear = (y) => setTarget(makeTerm(y, sem));
+  const editYear = () => {
+    const v = window.prompt('Type the academic START year (e.g. 2033 for 2033-2034):', String(yr));
+    if (v === null) return;
+    if (!validStartYear(v.trim())) { setMsg('Please type a 4-digit year such as 2033.'); return; }
+    setYear(Number(v.trim()));
+  };
 
   // load the chosen teacher's data into the editor
   useEffect(() => { let on = true; setForm(null); if (cur) hydrate(cur.form).then((f) => on && setForm({ ...f, name: cur.staff.name })); return () => { on = false; }; }, [selectedId, term, cur?.source, cur?.fromTerm]);   // eslint-disable-line
@@ -22,8 +33,13 @@ export default function UpdateTab({ term, items, selectedId, onSelect, onSave, o
 
   const save = async () => {
     if (!form.name.trim()) { setMsg('The name cannot be empty.'); return; }
+    if (target !== term && records.some((r) => r.key === `${target}|${cur.staff.id}`) && !window.confirm(`${form.name.trim()} already has a record for ${target}. Replace it with this one?`)) return;
     setSaving(true);
-    try { const { bytes } = await onSave(cur.staff.id, { ...form, name: form.name.trim() }); setMsg({ ok: true, text: `Updated ${form.name.trim()} for ${term} (${kb(bytes)} KB stored).` }); }
+    try {
+      const { bytes } = await onSave(cur.staff.id, { ...form, name: form.name.trim() }, target);
+      if (target !== term) onTerm(target);
+      setMsg({ ok: true, text: `Updated ${form.name.trim()} for ${target} (${kb(bytes)} KB stored).` });
+    }
     catch (e) { setMsg(e?.message || 'Could not save.'); } finally { setSaving(false); }
   };
 
@@ -58,6 +74,21 @@ export default function UpdateTab({ term, items, selectedId, onSelect, onSave, o
           </div>
           {cur.staff.status === 'relieved' ? <div className="notice bad">Relieved on <strong>{fmtDate(cur.staff.relievedOn)}</strong>{cur.staff.reason ? ` (${cur.staff.reason})` : ''}. Data stops after {cur.staff.relievedTerm}.</div> : null}
           {cur.source === 'carried' ? <div className="notice ok">Data was carried forward from <strong>{cur.fromTerm}</strong>. Press Save to keep it as the {term} record.</div> : null}
+
+          {/* NEW: Academic Year + Semester of this record */}
+          <div className="term-edit">
+            <span className="field-label">Academic Year :</span>
+            <select value={yr} onChange={(e) => setYear(Number(e.target.value))} aria-label="Academic year">
+              {yearOptions(yr).map((y) => <option key={y} value={y}>{y}-{y + 1}</option>)}
+            </select>
+            <button type="button" className="btn-link" onClick={editYear}>✎ Edit year</button>
+            <span className="field-label">Semester :</span>
+            <select value={sem} onChange={(e) => setTarget(makeTerm(yr, e.target.value))} aria-label="Semester">
+              {SEMESTERS.map((x) => <option key={x}>{x}</option>)}
+            </select>
+            {target !== term ? <em className="st note">Will be saved under {target}</em> : null}
+          </div>
+
           <FacultyForm form={form} setForm={setForm} setMsg={setMsg} />
           <div className="form-actions">
             <button type="button" className="btn-primary" disabled={saving} onClick={save}>{saving ? 'Saving…' : 'Save Changes'}</button>

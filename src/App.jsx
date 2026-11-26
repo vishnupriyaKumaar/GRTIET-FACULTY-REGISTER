@@ -13,7 +13,7 @@ import { normalizeForm } from './constants.js';
 import { uid } from './utils.js';
 import { currentTerm, parseTerm } from './terms.js';
 import { roster, resolve } from './roster.js';
-import { getSetting, setSetting, listStaff, listRecords, putStaff, putRecord, removeStaff, prepareForStore, pull, lookup, resetCache } from './storage.js';
+import { getSetting, setSetting, listStaff, listRecords, putStaff, putRecord, removeStaff, prepareForStore, pull, lookup, resetCache, removeRecord } from './storage.js';
 import Login from './components/Login.jsx';
 import ChangePasswordModal from './components/ChangePasswordModal.jsx';
 import { getRole, setRole } from './auth.js';
@@ -46,14 +46,12 @@ export default function App() {
   const setMsg = useCallback((m) => setMsgRaw(typeof m === 'string' ? (m ? { ok: false, text: m } : '') : m), []);
   useEffect(() => { if (msg?.ok) { const t = setTimeout(() => setMsgRaw(''), 4000); return () => clearTimeout(t); } }, [msg]);
 
-  const [sync, setSync] = useState({ state: 'idle', at: 0, err: '' });      // 'live' | 'offline'
   const roleRef = React.useRef(role); roleRef.current = role;
   const show = async () => { const [s, r] = await Promise.all([listStaff(), listRecords()]); setStaff(s); setRecords(r); };
   // Brings the shared database up to date (admin).  Teachers only ever write, they never download the register.
   const reload = useCallback(async () => {
     if (roleRef.current !== 'admin') { await show(); return; }
-    try { await pull(); await show(); setSync({ state: 'live', at: Date.now(), err: '' }); }
-    catch (e) { setSync((o) => ({ ...o, state: 'offline', err: e?.message || '' })); throw e; }
+    await pull(); await show();
   }, []);
 
   useEffect(() => {
@@ -70,7 +68,7 @@ export default function App() {
   useEffect(() => {
     if (role !== 'admin') return undefined;
     let busy = false;
-    const tick = async () => { if (busy || document.hidden) return; busy = true; try { await reload(); } catch { /* shown by the Live indicator */ } finally { busy = false; } };
+    const tick = async () => { if (busy || document.hidden) return; busy = true; try { await reload(); } catch { /* retried on the next tick */ } finally { busy = false; } };
     const iv = setInterval(tick, 5000);
     document.addEventListener('visibilitychange', tick); window.addEventListener('online', tick);
     return () => { clearInterval(iv); document.removeEventListener('visibilitychange', tick); window.removeEventListener('online', tick); };
@@ -88,15 +86,17 @@ export default function App() {
   const relievedCount = staff.filter((s) => s.status === 'relieved').length;
 
   // ---------- writes ----------
-  const saveTeacher = async (id, form) => {
+  // targetTerm: the academic year / semester to keep this record under (the Update tab can change it)
+  const saveTeacher = async (id, form, targetTerm = term) => {
     const f = normalizeForm(form);
     const sid = id || uid();
     const old = staff.find((s) => s.id === sid);
     const { form: stored, bytes } = await prepareForStore({ ...f, name: f.name.trim() });   // certificates -> own store, record <= 50 KB
     await putStaff({ ...(old || { status: 'active', created: Date.now() }), id: sid, name: f.name.trim(), updated: Date.now() });
-    await putRecord({ key: `${term}|${sid}`, term, staffId: sid, form: stored, updated: Date.now() });
+    await putRecord({ key: `${targetTerm}|${sid}`, term: targetTerm, staffId: sid, form: stored, updated: Date.now() });
+    if (targetTerm !== term && records.some((r) => r.key === `${term}|${sid}`)) await removeRecord(`${term}|${sid}`);   // moved to another year / semester
     await reload();
-    return { sid, bytes };
+    return { sid, bytes, term: targetTerm };
   };
   const relieve = async (date, reason) => {
     const s = relieveFor;
@@ -138,7 +138,6 @@ export default function App() {
             <button type="button" className="btn-secondary icon" onClick={() => setSettings(true)} aria-label="Settings and guide" title="Settings, guide, backup, source code">⚙</button>
           </>
         ) : null}
-        {isAdmin ? <span className={'live ' + sync.state} title={sync.err || 'Changes made on any phone or computer appear here within a few seconds'}>{sync.state === 'offline' ? '● Offline - retrying' : '● Live'}{sync.state === 'live' ? ` · ${new Date(sync.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : ''}</span> : null}
         <InstallApp setMsg={setMsg} />
         <button type="button" className="btn-secondary" onClick={() => { setRole(''); resetCache(); setRoleState(''); setTabRaw('add'); setSelectedId(null); }}><span aria-hidden="true">⎋</span> Logout</button>
       </div>
@@ -156,7 +155,7 @@ export default function App() {
       <section className="panel" role="tabpanel">
         {tab === 'add' ? <AddTab key={term} term={term} staff={staff} records={records} onSave={saveTeacher} setMsg={setMsg} teacherMode={!isAdmin} onLookup={lookup} /> : null}
         {isAdmin && tab === 'search' ? <SearchTab term={term} items={items} onView={(id) => setView({ id, term })} /> : null}
-        {isAdmin && tab === 'update' ? <UpdateTab term={term} items={items} selectedId={selectedId} onSelect={setSelectedId} onSave={saveTeacher} onRelieve={setRelieveFor} onReinstate={reinstate} onDelete={deleteTeacher} setMsg={setMsg} /> : null}
+        {isAdmin && tab === 'update' ? <UpdateTab term={term} items={items} selectedId={selectedId} onSelect={setSelectedId} onSave={saveTeacher} onTerm={setTerm} records={records} onRelieve={setRelieveFor} onReinstate={reinstate} onDelete={deleteTeacher} setMsg={setMsg} /> : null}
         {isAdmin && tab === 'relieved' ? <RelievedTab staff={staff} records={records} onView={(id) => setView({ id, term: staff.find((s) => s.id === id)?.relievedTerm || term })} onReinstate={reinstate} /> : null}
       </section>
     </div>
